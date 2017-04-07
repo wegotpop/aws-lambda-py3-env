@@ -150,12 +150,14 @@ function make_binary()
     then
         mkdir --parents "$PROJECT_LOCAL_DIR";
         sudo cp --recursive "$PROJECT_SOURCES" "$PROJECT_LOCAL_DIR";
+        sudo cp "$PROJECT_ENTRY_POINT" "$PROJECT_LOCAL_DIR";
 
         mkdir --parents "$PROJECT_REMOTE_DIR";
         # Extend the archive with the source of the project
         sudo zip -ur "$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE" \
                  "$PROJECT_SOURCES"                         \
-                 -x \*__pycache__\*;
+                 -x \*__pycache__\*                         \
+                 "$PROJECT_ENTRY_POINT";
     fi;
 }
 

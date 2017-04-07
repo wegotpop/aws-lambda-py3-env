@@ -4,7 +4,7 @@ source constants.sh;
 DOCKER_LAMBDA_IMAGE_NAME='fake-aws-lambda'
 
 # Test archived project in 'fake' AWS Lambda environment
-docker run --volume "$(pwd)/$PROJECT_DIRECTORY":/var/task   \
+docker run --volume "$(pwd)/$PROJECT_LOCAL_DIR":/var/task   \
            --name $DOCKER_LAMBDA_IMAGE_NAME                 \
            lambci/lambda:python2.7
 
