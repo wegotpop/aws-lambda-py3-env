@@ -52,12 +52,12 @@ function prepare_archive()
 {
     # Create local-build directory if it does not exist yet and copy the
     # interpreter files and folders there
-    mkdir --parents "$PROJECT_LOCAL_DIR";
-    cp --recursive "$PYTHON_SOURCE_DIR"/* "$PROJECT_LOCAL_DIR";
+    mkdir -p "$PROJECT_LOCAL_DIR";
+    cp -r "$PYTHON_SOURCE_DIR"/* "$PROJECT_LOCAL_DIR";
 
     # Create remote-build directory if it does not exist yet and create an
     # archive of the interpreter and copy that there
-    mkdir --parents "$PROJECT_REMOTE_DIR";
+    mkdir -p "$PROJECT_REMOTE_DIR";
     cd "$PYTHON_SOURCE_DIR";
     zip -r "../$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE"    \
         python                                          \
@@ -109,11 +109,11 @@ function make_binary()
 
     if [ -n "$CLEAN_BUILD_ENABLED" ];
     then
-        sudo rm --recursive --force "$PROJECT_BUILD_DIR";
+        sudo rm -r -f "$PROJECT_BUILD_DIR";
     fi;
 
     # Create build folder if it does not exist yet
-    mkdir --parents "$PROJECT_BUILD_DIR";
+    mkdir -p "$PROJECT_BUILD_DIR";
 
     if [ -n "$BUILD_PHASE_ENABLED" ];
     then
@@ -148,11 +148,11 @@ function make_binary()
 
     if [ -n "$FINALISE_PHASE_ENABLED" ];
     then
-        mkdir --parents "$PROJECT_LOCAL_DIR";
-        sudo cp --recursive "$PROJECT_SOURCES" "$PROJECT_LOCAL_DIR";
+        mkdir -p "$PROJECT_LOCAL_DIR";
+        sudo cp -r "$PROJECT_SOURCES" "$PROJECT_LOCAL_DIR";
         sudo cp "$PROJECT_ENTRY_POINT" "$PROJECT_LOCAL_DIR";
 
-        mkdir --parents "$PROJECT_REMOTE_DIR";
+        mkdir -p "$PROJECT_REMOTE_DIR";
         # Extend the archive with the source of the project
         sudo zip -ur "$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE" \
                  "$PROJECT_SOURCES"                         \
