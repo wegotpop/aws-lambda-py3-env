@@ -1,0 +1,9 @@
+# Kernel's fuse related patterns (for running in virtual machine only)
+.Trash-1000
+.fuse_hidden*
+
+# Python related patterns
+__pycache__
+
+# Generated outputs
+build
