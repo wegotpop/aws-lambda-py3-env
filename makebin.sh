@@ -7,30 +7,28 @@
 # because that one is copying these files into the image, and the later phases
 # are depending on these copied files
 
+# Skippable stages (flag: -s, --skip):
+#   - clean
+#   - build
+#   - run (this will skip both custom and archive)
+#       - custom
+#       - archive
 # Usage:
-#   $ bash makebin.sh --skip build --skip finalise
+#   $ bash makebin.sh --skip build --skip archive
 
 
 # Script level constants
 BASH_ENV_VARIABLE='PROCESS_PHASE';
 BASH_THIS_FILE="$(basename "$0")";
 BASH_CONSTANTS_FILE='constants.sh';
+BASH_HELPERS_FILE='helpers.sh';
 
 # Import shared constants
 source "$BASH_CONSTANTS_FILE";
-
-# Construct and store docker-file content
-read -r -d '' DOCKER_FILE_CONTENT <<- END_OF_DOCKER_FILE
-    FROM    $DOCKER_IMAGE_NAME
-    WORKDIR $DOCKER_WORKING_DIR
-    ENV     $BASH_ENV_VARIABLE BUILDING_PHASE
-    COPY    $BASH_THIS_FILE .
-    COPY    $BASH_CONSTANTS_FILE .
-    RUN     bash $BASH_THIS_FILE
-END_OF_DOCKER_FILE
+source "$BASH_HELPERS_FILE";
 
 
-function build_python()
+function build_image()
 {
     # Install necessary binaries
     yum install --assumeyes wget tar gcc zip zlib-devel;
@@ -48,42 +46,113 @@ function build_python()
 }
 
 
-function prepare_archive()
+function compile_and_distribute()
 {
-    # Create local-build directory if it does not exist yet and copy the
-    # interpreter files and folders there
-    mkdir -p "$PROJECT_LOCAL_DIR";
-    cp -r "$PYTHON_SOURCE_DIR"/* "$PROJECT_LOCAL_DIR";
+    COMPILE_CUSTOM_INTERPRETER=true;
+    CREATE_LOCALS_AND_ARCHIVE=true;
 
-    # Create remote-build directory if it does not exist yet and create an
-    # archive of the interpreter and copy that there
-    mkdir -p "$PROJECT_REMOTE_DIR";
-    cd "$PYTHON_SOURCE_DIR";
-    zip -r "../$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE"    \
-        python                                          \
-        Grammar                                         \
-        Lib                                             \
-        Mac                                             \
-        Objects                                         \
-        PCbuild                                         \
-        Python                                          \
-        Tools                                           \
-        Include                                         \
-        Misc                                            \
-        Parser                                          \
-        Programs                                        \
-        Doc                                             \
-        Modules                                         \
-        PC;
+    # Deal with the arguments
+    while [ -n "$1" ];
+    do
+        case "$1" in
+            -s|--skip)
+                shift;
+                case "$1" in
+                    custom) COMPILE_CUSTOM_INTERPRETER='';;
+                    archive) CREATE_LOCALS_AND_ARCHIVE='';;
+                    *)
+                        printf "Error: Unknown parameter for --skip: \`$1'\n";
+                        exit 1;;
+                esac;;
+            *)
+                printf "Error: Unknown parameter: \`$1'\n";
+                exit 1;;
+        esac;
+        shift;
+    done;
+
+    if [ -n "$COMPILE_CUSTOM_INTERPRETER" ];
+    then
+        # Compile customised interpreter
+        gcc -std=c99                                \
+            -O3                                     \
+            -DNDEBUG                                \
+            -march=native                           \
+            -Wall                                   \
+            -Wbad-function-cast                     \
+            -Wcast-qual                             \
+            -Wconversion                            \
+            -Wdouble-promotion                      \
+            -Wextra                                 \
+            -Wfloat-equal                           \
+            -Wformat=2                              \
+            -Wmissing-prototypes                    \
+            -Wpedantic                              \
+            -Wredundant-decls                       \
+            -Wstrict-prototypes                     \
+            -Wundef                                 \
+            -Wunsuffixed-float-constants            \
+            -Wwrite-strings                         \
+            -I$PYTHON_SOURCE_DIR/Include            \
+            -I$PYTHON_SOURCE_DIR                    \
+            -fwrapv                                 \
+            -fdiagnostics-color=always              \
+            -lpthread                               \
+            -ldl                                    \
+            -lutil                                  \
+            -lm                                     \
+            -Xlinker -export-dynamic                \
+            -o $PROJECT_LOCAL_DIR/$POP_PYTHON_OUT   \
+            $POP_PYTHON_SRC                         \
+            $PYTHON_SOURCE_DIR/$PYTHON_STATIC_LIBRARY;
+    fi;
+
+    if [ -n "$CREATE_LOCALS_AND_ARCHIVE" ];
+    then
+        # Create local-build directory if it does not exist yet and copy the
+        # interpreter files and folders there
+        mkdir -p "$PROJECT_LOCAL_DIR";
+        cp -r "$PYTHON_SOURCE_DIR"/* "$PROJECT_LOCAL_DIR";
+        cp -r "$PROJECT_SOURCES" "$PROJECT_LOCAL_DIR";
+        cp "$PROJECT_ENTRY_POINT" "$PROJECT_LOCAL_DIR";
+
+        # Create remote-build directory if it does not exist yet and create an
+        # archive of the interpreter and copy that there
+        mkdir -p "$PROJECT_REMOTE_DIR";
+        cd "$PYTHON_SOURCE_DIR";
+        zip -r "../$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE"    \
+            python                                          \
+            Grammar                                         \
+            Lib                                             \
+            Mac                                             \
+            Objects                                         \
+            PCbuild                                         \
+            Python                                          \
+            Tools                                           \
+            Include                                         \
+            Misc                                            \
+            Parser                                          \
+            Programs                                        \
+            Doc                                             \
+            Modules                                         \
+            PC;
+
+        # Extend the archive with the source of the project
+        cd ../;
+        zip -ur "$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE" \
+                "$PROJECT_SOURCES"                     \
+                -x \*__pycache__\*                     \
+                "$PROJECT_ENTRY_POINT";
+    fi;
 }
 
 
-function make_binary()
+function main()
 {
     CLEAN_BUILD_ENABLED=true;
     BUILD_PHASE_ENABLED=true;
     RUN_PHASE_ENABLED=true;
-    FINALISE_PHASE_ENABLED=true;
+    RUN_OPTIONS='';
 
     # Deal with the arguments
     while [ -n "$1" ];
@@ -95,13 +164,14 @@ function make_binary()
                     clean) CLEAN_BUILD_ENABLED='';;
                     build) BUILD_PHASE_ENABLED='';;
                     run) RUN_PHASE_ENABLED='';;
-                    finalise) FINALISE_PHASE_ENABLED='';;
+                    custom) RUN_OPTIONS="$RUN_OPTIONS --skip custom";;
+                    archive) RUN_OPTIONS="$RUN_OPTIONS --skip archive";;
                     *)
-                        printf "Unknown parameter for \`--skip': \`$1'\n";
+                        printf "Error: Unknown parameter for --skip: \`$1'\n";
                         exit 1;;
                 esac;;
             *)
-                printf "Unknown parameter: \`$1'\n";
+                printf "Error: Unknown parameter: \`$1'\n";
                 exit 1;;
         esac;
         shift;
@@ -114,15 +184,25 @@ function make_binary()
 
     # Create build folder if it does not exist yet
     mkdir -p "$PROJECT_BUILD_DIR";
+    mkdir -p "$PROJECT_LOCAL_DIR";
+    mkdir -p "$PROJECT_REMOTE_DIR";
 
     if [ -n "$BUILD_PHASE_ENABLED" ];
     then
-        # Save the docker-file
-        printf "$DOCKER_FILE_CONTENT" > "$PROJECT_BUILD_DIR/$DOCKER_FILE_NAME";
+        # Construct and save the docker-file
+        printf '%s\n'                                   \
+            "FROM    $DOCKER_IMAGE_NAME"                \
+            "WORKDIR $DOCKER_WORKING_DIR"               \
+            "ENV     $BASH_ENV_VARIABLE BUILDING_PHASE" \
+            "COPY    $BASH_THIS_FILE ."                 \
+            "COPY    $BASH_CONSTANTS_FILE ."            \
+            "COPY    $BASH_HELPERS_FILE ."              \
+            "RUN     bash $BASH_THIS_FILE"              \
+            > "$PROJECT_BUILD_DIR/$DOCKER_FILE_NAME";
 
         # Build container
         docker build --tag "$DOCKER_PYTHON_IMAGE_NAME"              \
-                     --file "$PROJECT_BUILD_DIR/$DOCKER_FILE_NAME"   \
+                     --file "$PROJECT_BUILD_DIR/$DOCKER_FILE_NAME"  \
                      .;
     fi;
 
@@ -131,41 +211,27 @@ function make_binary()
         # Remove previous archive file if present
         rm -f "$PROJECT_BUILD_DIR/$PROJECT_ARCHIVE";
 
-        # Build directory mount point in the container
-        DIR="$(pwd)/$PROJECT_BUILD_DIR:/$DOCKER_WORKING_DIR/$PROJECT_BUILD_DIR";
-
         # Run container
-        docker run --volume $DIR                            \
-                   --env $BASH_ENV_VARIABLE=RUNNING_PHASE   \
-                   --name $DOCKER_PYTHON_CONTAINER_NAME     \
-                   "$DOCKER_PYTHON_IMAGE_NAME"              \
-                   bash $BASH_THIS_FILE;
+        docker run --volume $(volumiser $POP_PYTHON_DIR)        \
+                   --volume $(volumiser $PROJECT_SOURCES)       \
+                   --volume $(volumiser $PROJECT_BUILD_DIR)     \
+                   --volume $(volumiser $PROJECT_ENTRY_POINT)   \
+                   --env $BASH_ENV_VARIABLE=RUNNING_PHASE       \
+                   --name $DOCKER_PYTHON_CONTAINER_NAME         \
+                   "$DOCKER_PYTHON_IMAGE_NAME"                  \
+                   bash $BASH_THIS_FILE $RUN_OPTIONS;
 
         # Clean up
         docker stop "$DOCKER_PYTHON_CONTAINER_NAME";
         docker rm "$DOCKER_PYTHON_CONTAINER_NAME";
-    fi;
-
-    if [ -n "$FINALISE_PHASE_ENABLED" ];
-    then
-        mkdir -p "$PROJECT_LOCAL_DIR";
-        sudo cp -r "$PROJECT_SOURCES" "$PROJECT_LOCAL_DIR";
-        sudo cp "$PROJECT_ENTRY_POINT" "$PROJECT_LOCAL_DIR";
-
-        mkdir -p "$PROJECT_REMOTE_DIR";
-        # Extend the archive with the source of the project
-        sudo zip -ur "$PROJECT_REMOTE_DIR/$PROJECT_ARCHIVE" \
-                 "$PROJECT_SOURCES"                         \
-                 -x \*__pycache__\*                         \
-                 "$PROJECT_ENTRY_POINT";
     fi;
 }
 
 
 case "${!BASH_ENV_VARIABLE}" in
     # If inside docker
-    BUILDING_PHASE) build_python;;
-    RUNNING_PHASE) prepare_archive;;
+    BUILDING_PHASE) build_image $@;;
+    RUNNING_PHASE) compile_and_distribute $@;;
     # If outside docker
-    *) make_binary $@;;
+    *) main $@;;
 esac;

@@ -2,16 +2,17 @@
 
 # Import shared constants
 source constants.sh;
-
-# Build directory mount point in the container
-DIR="$(pwd)/$PROJECT_BUILD_DIR:/$DOCKER_WORKING_DIR/$PROJECT_BUILD_DIR";
+source helpers.sh;
 
 # Run container in interactive mode
-docker run --interactive                            \
-           --tty                                    \
-           --volume "$DIR"                          \
-           --name "$DOCKER_PYTHON_CONTAINER_NAME"   \
-           "$DOCKER_PYTHON_IMAGE_NAME"              \
+docker run --interactive                                \
+           --tty                                        \
+           --volume $(volumiser $POP_PYTHON_DIR)        \
+           --volume $(volumiser $PROJECT_SOURCES)       \
+           --volume $(volumiser $PROJECT_BUILD_DIR)     \
+           --volume $(volumiser $PROJECT_ENTRY_POINT)   \
+           --name "$DOCKER_PYTHON_CONTAINER_NAME"       \
+           "$DOCKER_PYTHON_IMAGE_NAME"                  \
            /bin/bash;
 
 # Clean up

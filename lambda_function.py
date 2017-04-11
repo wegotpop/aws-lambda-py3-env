@@ -4,4 +4,4 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 from subprocess import check_output
 
 def lambda_handler(*args, **kwargs):
-    return {'output': check_output('./python src/main.py', shell=True)}
+    return {'output': check_output('./pop_python3 src/main.py', shell=True)}
