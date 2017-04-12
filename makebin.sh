@@ -18,7 +18,6 @@
 
 
 # Script level constants
-BASH_ENV_VARIABLE='PROCESS_PHASE';
 BASH_THIS_FILE="$(basename "$0")";
 BASH_CONSTANTS_FILE='constants.sh';
 BASH_HELPERS_FILE='helpers.sh';
@@ -34,15 +33,29 @@ function build_image()
     yum install --assumeyes wget tar gcc zip zlib-devel;
 
     # Download python source
-    wget "$PYTHON_SOURCE_URL/$PYTHON_VERSION/$PYTHON_SOURCE_DIR.tgz";
+    wget "$PYTHON_SOURCE_URL/$PYTHON_VER/$PYTHON_SOURCE_DIR.tgz";
 
-    # Unarchive source and swithc to dir
+    # Unarchive source and switch to the dir
     tar zxvf "$PYTHON_SOURCE_DIR.tgz";
     cd "$PYTHON_SOURCE_DIR";
 
-    # Compile from source and install it
+    # Compile from source
     ./configure;
     make;
+    cd ../;
+
+    # Download python 2 source
+    wget "$PYTHON_2_SOURCE_URL/$PYTHON_2_VER/$PYTHON_2_SOURCE_DIR.tgz";
+
+    # Unarchive source and switch to the dir
+    tar zxvf "$PYTHON_2_SOURCE_DIR.tgz";
+    cd "$PYTHON_2_SOURCE_DIR";
+
+    # Compile and install from source
+    ./configure;
+    make;
+    make install;
+    cd ../;
 }
 
 
@@ -105,6 +118,40 @@ function compile_and_distribute()
             -o $PROJECT_LOCAL_DIR/$POP_PYTHON_OUT   \
             $POP_PYTHON_SRC                         \
             $PYTHON_SOURCE_DIR/$PYTHON_STATIC_LIBRARY;
+
+        # Compile the lambda-function entry point
+        gcc -std=c99                                                        \
+            -O3                                                             \
+            -DNDEBUG                                                        \
+            -march=native                                                   \
+            -Wall                                                           \
+            -Wbad-function-cast                                             \
+            -Wcast-qual                                                     \
+            -Wconversion                                                    \
+            -Wdouble-promotion                                              \
+            -Wextra                                                         \
+            -Wfloat-equal                                                   \
+            -Wformat=2                                                      \
+            -Wmissing-prototypes                                            \
+            -Wpedantic                                                      \
+            -Wredundant-decls                                               \
+            -Wstrict-prototypes                                             \
+            -Wundef                                                         \
+            -Wunsuffixed-float-constants                                    \
+            -Wwrite-strings                                                 \
+            -I/usr/local/include/python$PYTHON_2_VER_MAIN.$PYTHON_2_VER_SUB \
+            -I$POP_PYTHON_DIR                                               \
+            -pipe                                                           \
+            -fdiagnostics-color=always                                      \
+            -fexceptions                                                    \
+            -fno-strict-aliasing                                            \
+            -fPIC                                                           \
+            -fstack-protector                                               \
+            -fwrapv                                                         \
+            -lpthread                                                       \
+            -shared                                                         \
+            -o $PROJECT_LOCAL_DIR/$PROJECT_ENTRY_NAME.so                    \
+            $POP_PYTHON_DIR/$PROJECT_ENTRY_NAME.c;
     fi;
 
     if [ -n "$CREATE_LOCALS_AND_ARCHIVE" ];
