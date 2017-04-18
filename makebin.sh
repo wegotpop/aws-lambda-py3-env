@@ -42,6 +42,15 @@ function build_image()
     # Compile from source
     ./configure;
     make;
+
+    # Place extension modules
+    for path in ./build/lib*/*.so;
+    do
+        name="$(basename $path)";
+        cp "$path" "Lib/${name%%.*}.so";
+    done;
+
+    # Switch folders
     cd ../;
 
     # Download python 2 source
@@ -55,6 +64,8 @@ function build_image()
     ./configure;
     make;
     make install;
+
+    # Switch folders
     cd ../;
 }
 
