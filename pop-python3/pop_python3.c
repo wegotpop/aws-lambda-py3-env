@@ -33,8 +33,13 @@ pop_push(PyObject *self,
     (void)self;
     (void)args;
 
-    int    socket_descriptor;
-    struct sockaddr_un server_address = {AF_UNIX, SOCKET_SERVER_PATH};
+    PyObject *pickled_arguments;
+    char     *buffer;
+    size_t    buffer_size;
+    size_t    buffer_used;
+    ssize_t   received;
+    int       socket_descriptor;
+    struct    sockaddr_un server_address = {AF_UNIX, SOCKET_SERVER_PATH};
 
     if ((socket_descriptor = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
     {
@@ -101,38 +106,90 @@ pop_push(PyObject *self,
         goto clean_up_socket;
     }
 
-    char BUFF[1024];
-    // TODO: handle the return value `0`
-    if (recv(socket_descriptor, BUFF, 1024, 0) == -1)
+    #define CHUNK_SIZE (1 << 10)
+    if (!(buffer = malloc(CHUNK_SIZE + 1)))
     {
-        #define CANNOT_RECEIVE(VALUE)                                          \
-        PyErr_SetString(PopSocketError,                                        \
-                        "Internal error: "                                     \
-                        "cannot receive data from server (" #VALUE ")");       \
-        break;
-        switch (errno)
-        {
-            case EAGAIN     : CANNOT_RECEIVE(EAGAIN)
-            case EBADF      : CANNOT_RECEIVE(EBADF)
-            case ECONNRESET : CANNOT_RECEIVE(ECONNRESET)
-            case EINTR      : CANNOT_RECEIVE(EINTR)
-            case EINVAL     : CANNOT_RECEIVE(EINVAL)
-            case ENOTCONN   : CANNOT_RECEIVE(ENOTCONN)
-            case ENOTSOCK   : CANNOT_RECEIVE(ENOTSOCK)
-            case EOPNOTSUPP : CANNOT_RECEIVE(EOPNOTSUPP)
-            case ETIMEDOUT  : CANNOT_RECEIVE(ETIMEDOUT)
-            case EIO        : CANNOT_RECEIVE(EIO)
-            case ENOBUFS    : CANNOT_RECEIVE(ENOBUFS)
-            case ENOMEM     : CANNOT_RECEIVE(ENOMEM)
-            default         : CANNOT_RECEIVE(unknown)
-        }
-        #undef CANNOT_RECEIVE
+        PyErr_SetString(PopSocketError,
+                        "Internal error: cannot allocate space for buffer");
         goto clean_up_socket;
     }
+    buffer[0]   = '\0';
+    buffer_size = CHUNK_SIZE + 1;
+    buffer_used = 1;
 
-    puts(BUFF);
+    /* Receive incoming data */
+    do
+    {
+        /* Resize buffer if necessary */
+        if (buffer_used + CHUNK_SIZE > buffer_size &&
+            !(buffer = realloc(buffer,
+                               (buffer_size = (buffer_size - 1)*2 + 1))))
+        {
+            PyErr_SetString(PopSocketError,
+                    "Internal error: cannot reallocate space for buffer");
+            goto clean_up_buffer;
+        }
+
+        /* Receive chunk and store in buffer */
+        if ((received = recv(socket_descriptor,
+                             buffer + (buffer_used - 1),
+                             CHUNK_SIZE,
+                             0)) == -1)
+        {
+            #define CANNOT_RECEIVE(VALUE)                                      \
+            PyErr_SetString(PopSocketError,                                    \
+                            "Internal error: "                                 \
+                            "cannot receive data from server (" #VALUE ")");   \
+            break;
+            switch (errno)
+            {
+                case EAGAIN     : CANNOT_RECEIVE(EAGAIN)
+                case EBADF      : CANNOT_RECEIVE(EBADF)
+                case ECONNRESET : CANNOT_RECEIVE(ECONNRESET)
+                case EINTR      : CANNOT_RECEIVE(EINTR)
+                case EINVAL     : CANNOT_RECEIVE(EINVAL)
+                case ENOTCONN   : CANNOT_RECEIVE(ENOTCONN)
+                case ENOTSOCK   : CANNOT_RECEIVE(ENOTSOCK)
+                case EOPNOTSUPP : CANNOT_RECEIVE(EOPNOTSUPP)
+                case ETIMEDOUT  : CANNOT_RECEIVE(ETIMEDOUT)
+                case EIO        : CANNOT_RECEIVE(EIO)
+                case ENOBUFS    : CANNOT_RECEIVE(ENOBUFS)
+                case ENOMEM     : CANNOT_RECEIVE(ENOMEM)
+                default         : CANNOT_RECEIVE(unknown)
+            }
+            #undef CANNOT_RECEIVE
+            goto clean_up_buffer;
+        }
+        buffer_used += (size_t)received;
+    }
+    while (received);
+    #undef CHUNK_SIZE
+
+    /* Nul-terminate the buffer */
+    buffer[buffer_used - 1] = '\0';
+
+
+    ///
+    printf("[recv] buffer_size: %zu\n", buffer_size);
+    printf("[recv] buffer_used: %zu\n", buffer_used);
+    printf("[recv] buffer: %s\n", buffer);
+    ///
+
+
+    /* Create python object from the recieved data */
+    if (!(pickled_arguments = PyBytes_FromString(buffer)))
+        goto clean_up_buffer;
+
+    /* Clean up */
+    free(buffer);
+    close(socket_descriptor);
+
+    /* Return received python object */
+    return pickled_arguments;
 
     /* If there was a problem */
+    clean_up_buffer:
+        free(buffer);
     clean_up_socket:
         close(socket_descriptor);
     failed:

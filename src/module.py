@@ -1,2 +1,11 @@
-def function(a, b, c, d, e, f):
-    print({'output': tuple(repr(x) for x in (a, b, c, d, e, f))})
+from aws_lambda import LAMBDA_HANDLER
+
+class Message:
+
+    def __init__(self):
+        print('hello from Message!')
+
+
+def function():
+    # print(LAMBDA_HANDLER.pull())
+    print('python:', LAMBDA_HANDLER.push(Message))

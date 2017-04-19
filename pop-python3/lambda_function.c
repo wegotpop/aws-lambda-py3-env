@@ -6,7 +6,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <errno.h>
 
 #include <pthread.h>
@@ -24,12 +23,18 @@ static PyObject *PopPython3Error;
 
 
 static void*
-communication_thread(void *error)
+communication_thread(void *pickled_arguments)
 {
-    int    socket_descriptor,
-           accept_descriptor;
-    struct sockaddr_un server_address = {AF_UNIX, SOCKET_SERVER_PATH};
+    char       *buffer = NULL;
+    Py_ssize_t  buffer_size;
+    int         socket_descriptor,
+                accept_descriptor;
+    struct      sockaddr_un server_address = {AF_UNIX, SOCKET_SERVER_PATH};
 
+    /* Make sure the socket is not bound */
+    unlink(SOCKET_SERVER_PATH);
+
+    /* Creat nameless socket */
     if ((socket_descriptor = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
     {
         #define CANNOT_CREATE_SOCKET(VALUE)                                    \
@@ -53,6 +58,7 @@ communication_thread(void *error)
         goto failed;
     }
 
+    /* Bind socket */
     if (bind(socket_descriptor,
              &server_address,
              sizeof(struct sockaddr_un)) == -1)
@@ -134,8 +140,30 @@ communication_thread(void *error)
         goto clean_up_socket;
     }
 
-    #define HW "hello, world!"
-    if (send(accept_descriptor, HW, sizeof HW, 0) == -1)
+    Py_INCREF((PyObject *)pickled_arguments);
+
+    if ((buffer_size = PyString_Size((PyObject *)pickled_arguments)) < 0)
+    {
+        PyErr_SetString(PopPython3Error,
+                        "Internal error: buffer size is negative");
+        goto clean_up_socket;
+    }
+
+    if (!(buffer = PyString_AsString((PyObject *)pickled_arguments)))
+    {
+        PyErr_SetString(PopPython3Error,
+                        "Internal error: buffer is NULL");
+        goto clean_up_socket;
+    }
+
+
+    ///
+    printf("[send] buffer_size: %zu\n", buffer_size);
+    printf("[send] buffer: %s\n", buffer);
+    ///
+
+
+    if (send(accept_descriptor, buffer, (size_t)buffer_size, 0) == -1)
     {
         #define CANNOT_SEND_DATA(VALUE)                                        \
             PyErr_SetString(PopPython3Error,                                   \
@@ -168,13 +196,13 @@ communication_thread(void *error)
     }
 
     /* Clean up */
+    Py_DECREF((PyObject *)pickled_arguments);
     close(accept_descriptor);
     close(socket_descriptor);
     unlink(SOCKET_SERVER_PATH);
 
     /* If everything went fine */
-    *(bool *)error = false;
-    return NULL;
+    Py_RETURN_NONE;
 
     /* If there was a problem */
     clean_up_accept:
@@ -183,33 +211,56 @@ communication_thread(void *error)
         close(socket_descriptor);
         unlink(SOCKET_SERVER_PATH);
     failed:
-        *(bool *)error = true;
         return NULL;
 }
 
 
 static PyObject*
 lambda_handler(PyObject *self,
-               PyObject *args)
+               PyObject *arguments)
 {
-    //
-    // To handle *args, **kwargs => PyArg_ParseTupleAndKeywords()
-    //
     (void)self;
-    (void)args;
 
     int        result;
-    // FILE      *output;
-    // PyObject  *received,
-    //           *module,
-    //           *states;
     pthread_t  thread;
-    bool       error = false;
+    PyObject  *send_pickled,
+              *recv_pickled,
+              *module,
+              *dumps_method,
+              *loads_method,
+              *protocol,
+              *received;
 
+    /* Import pickle module */
+    if (!(module = PyImport_ImportModuleNoBlock("cPickle")))
+        goto failed;
+
+    /* Create method argument */
+    if (!(dumps_method = PyString_FromString("dumps")))
+        goto failed;
+
+    /* Create protocol argument */
+    if (!(protocol = PyInt_FromLong(HIGHEST_PYTHON2_PROTOCOL)))
+        goto failed;
+
+    /* Pickle the lambda_handler arguments */
+    Py_INCREF(module);
+    Py_INCREF(dumps_method);
+    Py_INCREF(arguments);
+    Py_INCREF(protocol);
+    if (!(send_pickled = PyObject_CallMethodObjArgs(module,
+                                                    dumps_method,
+                                                    arguments,
+                                                    protocol,
+                                                    NULL)))
+        goto failed;
+
+    /* Create the server side of the communication in a separate thread */
+    Py_INCREF(send_pickled);
     if ((result = pthread_create(&thread,
                                  NULL,
                                  communication_thread,
-                                 (void *)&error)))
+                                 (void *)send_pickled)))
     {
         #define CANNOT_CREATE_THREAD(VALUE)                                    \
             PyErr_SetString(PopPython3Error,                                   \
@@ -228,12 +279,17 @@ lambda_handler(PyObject *self,
         goto failed;
     }
 
-    /* Run command and get the output */
+    /* Run the custom python interpreter */
     if (system("./pop_python3 " POP_ENTRY_POINT))
+    {
+        PyErr_SetString(PopPython3Error,
+                        "Internal error: something went wrong in '"
+                        POP_ENTRY_POINT "'");
         goto failed;
+    }
 
-    /* Wait for thread */
-    if ((result = pthread_join(thread, NULL)))
+    /* Wait for communication thread to return */
+    if ((result = pthread_join(thread, (void *)&recv_pickled)))
     {
         #define CANNOT_JOIN_THREAD(VALUE)                                      \
             PyErr_SetString(PopPython3Error,                                   \
@@ -251,14 +307,38 @@ lambda_handler(PyObject *self,
         goto failed;
     }
 
-    /* If something went wrong inside the thread */
-    if (error)
-        goto failed;
+    // /* If something went wrong inside the thread */
+    // if (!recv_pickled)
+    //     goto failed;
+
+    // /* Create method argument */
+    // if (!(loads_method = PyString_FromString("loads")))
+    //     goto failed;
+
+    // /* Pickle the lambda_handler arguments */
+    // Py_INCREF(loads_method);
+    // Py_INCREF(recv_pickled);
+    // if (!(received = PyObject_CallMethodObjArgs(module,
+    //                                             loads_method,
+    //                                             recv_pickled,
+    //                                             NULL)))
+    //     goto failed;
+
+    (void)loads_method;
+
+    Py_DECREF(module);
+    Py_DECREF(dumps_method);
+    Py_DECREF(arguments);
+    Py_DECREF(protocol);
+    Py_DECREF(send_pickled);
+    // Py_DECREF(loads_method);
+    // Py_DECREF(recv_pickled);
+
+    received = Py_None;
 
     /* If everything went fine, return the result value */
-    // Py_INCREF(received);
-    // return received;
-    Py_RETURN_NONE;
+    Py_INCREF(received);
+    return received;
 
     /* If something went wrong */
     failed:
@@ -270,7 +350,7 @@ static PyMethodDef AWSLambdaFunctions[] =
 {
     {"lambda_handler",
      lambda_handler,
-     METH_VARARGS|METH_KEYWORDS,
+     METH_VARARGS,
      "AWS entry point."},
     {NULL, NULL, 0, NULL}
 };
